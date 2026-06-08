@@ -1,0 +1,6 @@
+{
+  "name": "Larson Fabrics",
+  "description": "Premium luxury fabric store at Azam Market, Lahore, Pakistan. Featuring custom 3D web-based fabric textures and automated inquiry tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
