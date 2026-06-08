@@ -13,10 +13,11 @@ const NAV_HEIGHT_EXPANDED = 80;
 const NAV_HEIGHT_SHRUNK = 60;
 
 function isNavOverDarkBackground(navHeight: number): boolean {
+  const sampleY = Math.min(Math.max(navHeight * 0.5, 1), navHeight - 1);
   const darkZones = document.querySelectorAll("[data-nav-dark]");
   for (let i = 0; i < darkZones.length; i++) {
     const rect = darkZones[i].getBoundingClientRect();
-    if (rect.top <= navHeight && rect.bottom >= 0) {
+    if (rect.top <= sampleY && rect.bottom >= sampleY) {
       return true;
     }
   }
@@ -44,7 +45,7 @@ export function Navbar() {
   const { cartCount, setCartOpen } = useCart();
 
   const [scrolled, setScrolled] = useState(false);
-  const [overDark, setOverDark] = useState(true);
+  const [overDark, setOverDark] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [megaOpen, setMegaOpen] = useState(false);
   const [megaItem, setMegaItem] = useState<string | null>(null);
