@@ -30,6 +30,36 @@ import {
   ChevronRight
 } from "lucide-react";
 
+type ProductImageAsset = {
+  url: string;
+  publicId?: string;
+};
+
+const DEFAULT_PRODUCT_IMAGE_URL = "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800";
+const PRODUCT_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+
+function productImagesFromProduct(product: any): ProductImageAsset[] {
+  const publicIds = product?.imagePublicIds && typeof product.imagePublicIds === "object"
+    ? product.imagePublicIds
+    : {};
+
+  return Array.isArray(product?.images)
+    ? product.images
+        .map((url: string) => String(url || "").trim())
+        .filter(Boolean)
+        .map((url: string) => ({ url, publicId: publicIds[url] }))
+    : [];
+}
+
+function imagePublicIdsFromAssets(images: ProductImageAsset[]): Record<string, string> {
+  return images.reduce<Record<string, string>>((acc, image) => {
+    if (image.publicId) {
+      acc[image.url] = image.publicId;
+    }
+    return acc;
+  }, {});
+}
+
 export function Manager() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passcode, setPasscode] = useState("");
@@ -63,6 +93,7 @@ export function Manager() {
   const [showProductForm, setShowProductForm] = useState<"none" | "create" | "edit">("none");
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [isUploadingProductImg, setIsUploadingProductImg] = useState(false);
+  const [deletingProductImageKey, setDeletingProductImageKey] = useState<string | null>(null);
   const [productError, setProductError] = useState<string | null>(null);
   const [productSuccess, setProductSuccess] = useState<string | null>(null);
 
@@ -78,7 +109,7 @@ export function Manager() {
     minOrder: 4,
     priceMin: 1200,
     priceMax: 1600,
-    images: "",
+    images: [] as ProductImageAsset[],
     specifications: {
       threadCount: "120s Double-Ply",
       width: "54 Inches (Standard Suit)",
@@ -235,6 +266,7 @@ export function Manager() {
     setSelectedProductId(null);
     setProductError(null);
     setProductSuccess(null);
+    setDeletingProductImageKey(null);
     setProductForm({
       name: "",
       category: "Cotton",
@@ -246,7 +278,7 @@ export function Manager() {
       minOrder: 4,
       priceMin: 1200,
       priceMax: 1600,
-      images: "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800",
+      images: [],
       specifications: {
         threadCount: "120s Double-Ply",
         width: "54 Inches (Standard Suit)",
@@ -266,6 +298,7 @@ export function Manager() {
     setSelectedProductId(p._id);
     setProductError(null);
     setProductSuccess(null);
+    setDeletingProductImageKey(null);
     setProductForm({
       name: p.name,
       category: p.category,
@@ -277,7 +310,7 @@ export function Manager() {
       minOrder: p.minOrder || 4,
       priceMin: p.priceRange?.min || 1000,
       priceMax: p.priceRange?.max || 2000,
-      images: Array.isArray(p.images) ? p.images.join(", ") : p.images || "",
+      images: productImagesFromProduct(p),
       specifications: {
         threadCount: p.specifications?.threadCount || "N/A",
         width: p.specifications?.width || "54 Inches",
@@ -347,7 +380,8 @@ export function Manager() {
         min: Number(productForm.priceMin),
         max: Number(productForm.priceMax)
       },
-      images: productForm.images.split(",").map((url) => url.trim()).filter((url) => url.length > 0),
+      images: productForm.images.map((image) => image.url),
+      imagePublicIds: imagePublicIdsFromAssets(productForm.images),
       specifications: productForm.specifications,
       swatches: productForm.swatches
     };
@@ -389,6 +423,156 @@ export function Manager() {
     } catch (err: any) {
       setProductError(err.message || "Failed to commit product variables. Check Atlas logs.");
     }
+  };
+
+  const handleUploadProductImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.currentTarget.files || []);
+    e.currentTarget.value = "";
+
+    if (selectedFiles.length === 0) return;
+
+    const oversizedFile = selectedFiles.find((file) => file.size > PRODUCT_IMAGE_MAX_BYTES);
+    if (oversizedFile) {
+      setProductError(`"${oversizedFile.name}" is larger than the 20MB product image limit.`);
+      return;
+    }
+
+    const formData = new FormData();
+    selectedFiles.forEach((file) => formData.append("images", file));
+    if (showProductForm === "edit" && selectedProductId) {
+      formData.append("productId", selectedProductId);
+    }
+
+    setIsUploadingProductImg(true);
+    setProductError(null);
+    setProductSuccess(null);
+
+    try {
+      const res = await fetch(apiUrl("/products/images/upload"), {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${passcode}`
+        },
+        body: formData
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to upload product image assets.");
+      }
+
+      const uploadedImages = Array.isArray(data.images)
+        ? data.images
+            .map((image: any) => ({
+              url: String(image.url || "").trim(),
+              publicId: image.publicId ? String(image.publicId).trim() : undefined
+            }))
+            .filter((image: ProductImageAsset) => image.url)
+        : [];
+
+      if (data.product) {
+        setProducts((prev) => prev.map((p) => (p._id === data.product._id ? data.product : p)));
+        setProductForm((prev) => ({
+          ...prev,
+          images: productImagesFromProduct(data.product)
+        }));
+      } else {
+        setProductForm((prev) => ({
+          ...prev,
+          images: [...prev.images, ...uploadedImages]
+        }));
+      }
+
+      setProductSuccess(`${uploadedImages.length} product image${uploadedImages.length === 1 ? "" : "s"} uploaded successfully.`);
+    } catch (err: any) {
+      setProductError(err.message || "Failed to upload product image assets.");
+    } finally {
+      setIsUploadingProductImg(false);
+    }
+  };
+
+  const handleRemoveProductImage = async (image: ProductImageAsset, index: number) => {
+    const confirmMessage = image.publicId || (showProductForm === "edit" && selectedProductId)
+      ? "Delete this image from the product and Cloudinary where applicable?"
+      : "Remove this image from the product draft?";
+    if (!window.confirm(confirmMessage)) return;
+
+    const imageKey = `${image.url}-${index}`;
+    setDeletingProductImageKey(imageKey);
+    setProductError(null);
+    setProductSuccess(null);
+
+    try {
+      if (showProductForm === "edit" && selectedProductId) {
+        const res = await fetch(apiUrl(`/products/${selectedProductId}/images`), {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${passcode}`
+          },
+          body: JSON.stringify({ url: image.url, publicId: image.publicId })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to delete product image.");
+        }
+
+        if (data.product) {
+          setProducts((prev) => prev.map((p) => (p._id === data.product._id ? data.product : p)));
+          setProductForm((prev) => ({
+            ...prev,
+            images: productImagesFromProduct(data.product)
+          }));
+        }
+      } else {
+        if (image.publicId) {
+          const res = await fetch(apiUrl("/products/images/cloudinary"), {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${passcode}`
+            },
+            body: JSON.stringify({ publicId: image.publicId })
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to delete draft image from Cloudinary.");
+          }
+        }
+
+        setProductForm((prev) => ({
+          ...prev,
+          images: prev.images.filter((_, i) => i !== index)
+        }));
+      }
+
+      setProductSuccess("Product image removed successfully.");
+    } catch (err: any) {
+      setProductError(err.message || "Failed to remove product image.");
+    } finally {
+      setDeletingProductImageKey(null);
+    }
+  };
+
+  const handleMoveProductImage = (index: number, direction: -1 | 1) => {
+    setProductForm((prev) => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= prev.images.length) {
+        return prev;
+      }
+
+      const nextImages = [...prev.images];
+      const current = nextImages[index];
+      nextImages[index] = nextImages[nextIndex];
+      nextImages[nextIndex] = current;
+
+      return {
+        ...prev,
+        images: nextImages
+      };
+    });
   };
 
   const handleDeleteProduct = async (id: string, name: string) => {
@@ -989,69 +1173,95 @@ export function Manager() {
                             </div>
                           </div>
 
-                          {/* Image URLs */}
-                          <div className="space-y-2">
-                            <label className="block uppercase tracking-wider font-bold text-[10px] text-navy-mid mb-1">Image Asset URLs (Unsplash or direct absolute link, comma-separated)</label>
-                            <input
-                              type="text"
-                              value={productForm.images}
-                              onChange={(e) => setProductForm((p) => ({ ...p, images: e.target.value }))}
-                              className="w-full p-2.5 bg-white border border-navy/20 rounded-xs font-mono text-[10px] focus:ring-1 focus:ring-gold"
-                              placeholder="https://images.unsplash.com/..."
-                            />
+                          {/* Product Images */}
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <label className="block uppercase tracking-wider font-bold text-[10px] text-navy-mid">Product Images</label>
+                              <span className="font-mono text-[9px] text-navy/40">{productForm.images.length} attached</span>
+                            </div>
+
+                            {productForm.images.length > 0 ? (
+                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                                {productForm.images.map((image, idx) => {
+                                  const imageKey = `${image.url}-${idx}`;
+                                  const isDeleting = deletingProductImageKey === imageKey;
+                                  return (
+                                    <div key={imageKey} className="bg-white border border-navy/10 rounded-xs overflow-hidden">
+                                      <div className="relative aspect-[4/3] bg-neutral-100">
+                                        <img
+                                          src={image.url}
+                                          alt={`${productForm.name || "Product"} image ${idx + 1}`}
+                                          referrerPolicy="no-referrer"
+                                          className="w-full h-full object-cover"
+                                        />
+                                        {idx === 0 && (
+                                          <span className="absolute top-1.5 left-1.5 bg-[#0A1F5C] text-white px-1.5 py-0.5 rounded-xs uppercase tracking-wider font-mono text-[8px] font-bold">
+                                            Main
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="p-2 space-y-2">
+                                        <p className="font-mono text-[8px] text-navy/45 truncate" title={image.url}>
+                                          {image.publicId ? "Cloudinary asset" : "External image"}
+                                        </p>
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleMoveProductImage(idx, -1)}
+                                            disabled={idx === 0 || isDeleting}
+                                            title="Move earlier"
+                                            className="p-1 border border-navy/10 rounded-xs text-navy hover:border-gold disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                          >
+                                            <ChevronLeft className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleMoveProductImage(idx, 1)}
+                                            disabled={idx === productForm.images.length - 1 || isDeleting}
+                                            title="Move later"
+                                            className="p-1 border border-navy/10 rounded-xs text-navy hover:border-gold disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                          >
+                                            <ChevronRight className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemoveProductImage(image, idx)}
+                                            disabled={isDeleting}
+                                            title="Delete image"
+                                            className="p-1 border border-red-100 rounded-xs text-red-500 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ml-auto"
+                                          >
+                                            <Trash className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="bg-white border border-dashed border-navy/15 rounded-xs p-4 text-center font-body text-[10px] text-navy-mid">
+                                No product images attached yet.
+                              </div>
+                            )}
                             
-                            {/* Premium File Uploader */}
                             <div className="bg-neutral-50 border border-dashed border-navy/15 rounded-xs p-3 flex flex-col sm:flex-row items-center justify-between gap-4">
                               <div className="text-left space-y-0.5">
-                                <p className="font-bold text-[10px] uppercase font-sans tracking-tight text-navy">Direct Image Upload to Cloudinary</p>
-                                <p className="text-[9px] text-navy-mid">Choose an image from your device to automatically compile and generate absolute CDN links.</p>
+                                <p className="font-bold text-[10px] uppercase font-sans tracking-tight text-navy">Cloudinary Product Upload</p>
+                                <p className="text-[9px] text-navy-mid">Up to 20MB per image. Multiple files are supported.</p>
                               </div>
                               
-                              <label className="flex-shrink-0 cursor-pointer text-center">
-                                <span className="inline-block bg-[#0A1F5C] hover:bg-navy text-white text-[9px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-xs transition-colors select-none">
-                                  {isUploadingProductImg ? "Uploading to Cloud..." : "Upload local asset"}
+                              <label className={`flex-shrink-0 text-center ${isUploadingProductImg ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}>
+                                <span className="inline-flex items-center gap-1.5 bg-[#0A1F5C] hover:bg-navy text-white text-[9px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-xs transition-colors select-none">
+                                  <PlusCircle className="w-3 h-3" />
+                                  {isUploadingProductImg ? "Uploading..." : "Upload Images"}
                                 </span>
                                 <input
                                   type="file"
                                   accept="image/*"
+                                  multiple
                                   disabled={isUploadingProductImg}
                                   className="hidden"
-                                  onChange={async (e) => {
-                                    const file = e.target.files?.[0];
-                                    if (!file) return;
-                                    
-                                    if (file.size > 2 * 1024 * 1024) {
-                                      alert("Maximum image upload size limit is 2MB.");
-                                      return;
-                                    }
-                                    
-                                    setIsUploadingProductImg(true);
-                                    const fileReader = new FileReader();
-                                    fileReader.onloadend = async () => {
-                                      try {
-                                        const res = await fetch(apiUrl("/reviews/upload"), {
-                                          method: "POST",
-                                          headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ image: fileReader.result as string })
-                                        });
-                                        if (res.ok) {
-                                          const data = await res.json();
-                                          const currentImages = productForm.images ? productForm.images.trim() : "";
-                                          const finalImages = currentImages ? `${currentImages}, ${data.url}` : data.url;
-                                          setProductForm((prev) => ({ ...prev, images: finalImages }));
-                                        } else {
-                                          const err = await res.json();
-                                          alert(err.error || "Failed to process image upload.");
-                                        }
-                                      } catch (err) {
-                                        console.error(err);
-                                        alert("Connection failure during image upload.");
-                                      } finally {
-                                        setIsUploadingProductImg(false);
-                                      }
-                                    };
-                                    fileReader.readAsDataURL(file);
-                                  }}
+                                  onChange={handleUploadProductImages}
                                 />
                               </label>
                             </div>

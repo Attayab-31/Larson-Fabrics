@@ -22,7 +22,7 @@ export function ProductCard({
   onInquireClick,
 }: ProductCardProps) {
   const { navigate } = useTransition();
-  const image = product.images[0] || "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800";
+  const image = product.images?.[0] || "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800";
 
   const [ratingInfo, setRatingInfo] = useState<{ count: number; average: number } | null>(null);
 

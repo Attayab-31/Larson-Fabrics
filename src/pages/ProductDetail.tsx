@@ -13,6 +13,8 @@ import { useTransition, usePathnameFallback } from "@/src/components/layout/Tran
 import { useCart } from "@/src/lib/cart";
 import { Plus, Minus, ShoppingBag } from "lucide-react";
 
+const DEFAULT_PRODUCT_IMAGE_URL = "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800";
+
 export function ProductDetail() {
   const { pathname, navigate } = useTransition();
   const fallbackPath = usePathnameFallback();
@@ -96,6 +98,8 @@ export function ProductDetail() {
     { label: "Color Fixation", value: product.specifications?.dyeType || "VAT Dyeing" },
     { label: "Minimum Bolt", value: `${product.minOrder} meters` },
   ];
+  const productImages = product.images.length > 0 ? product.images : [DEFAULT_PRODUCT_IMAGE_URL];
+  const activeImage = productImages[activeImageIdx] || productImages[0];
 
   return (
     <div className="relative w-full text-navy">
@@ -129,7 +133,7 @@ export function ProductDetail() {
           <div className="space-y-8">
             <div className="relative rounded-sm overflow-hidden aspect-[4/5] bg-neutral-100 shadow-sm">
               <img
-                src={product.images[activeImageIdx] || product.images[0]}
+                src={activeImage}
                 alt={product.name}
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover transition-all duration-300"
@@ -137,9 +141,9 @@ export function ProductDetail() {
             </div>
 
             {/* Thumbnail loop */}
-            {product.images.length > 1 && (
+            {productImages.length > 1 && (
               <div className="flex gap-4">
-                {product.images.map((img, i) => (
+                {productImages.map((img, i) => (
                   <button
                     key={i}
                     onClick={() => setActiveImageIdx(i)}
@@ -162,7 +166,7 @@ export function ProductDetail() {
               </p>
               
               <FabricViewer360
-                fabricImage={product.images[activeImageIdx] || product.images[0]}
+                fabricImage={activeImage}
                 fabricColor={product.swatches?.[0]?.color || "#D4AF37"}
                 swatches={product.swatches}
               />

@@ -9,6 +9,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import { v2 as cloudinary } from "cloudinary";
+import multer from "multer";
 
 // Define local persistent storage directories relative to the process root
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -17,6 +18,14 @@ const ORDERS_FILE = path.join(DATA_DIR, "orders.json");
 const INQUIRIES_FILE = path.join(DATA_DIR, "inquiries.json");
 const BESPOKE_FILE = path.join(DATA_DIR, "bespoke.json");
 const REVIEWS_FILE = path.join(DATA_DIR, "reviews.json");
+const DEFAULT_PRODUCT_IMAGE_URL = "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800";
+const PRODUCT_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+const PRODUCT_IMAGE_UPLOAD_LIMIT = 10;
+
+type ProductImageAsset = {
+  url: string;
+  publicId?: string;
+};
 
 // Cache for dynamic MongoDB client and active database connection
 let mongoClientInstance: MongoClient | null = null;
@@ -229,6 +238,129 @@ function writeCollection(filePath: string, data: any[]) {
   }
 }
 
+function normalizeProductImages(input: unknown): string[] {
+  const values = Array.isArray(input)
+    ? input
+    : typeof input === "string"
+      ? input.split(",")
+      : [];
+
+  return Array.from(
+    new Set(
+      values
+        .map((url) => String(url || "").trim())
+        .filter((url) => url.length > 0)
+    )
+  );
+}
+
+function normalizeImagePublicIds(input: unknown, allowedUrls?: string[]): Record<string, string> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+
+  const allowed = allowedUrls ? new Set(allowedUrls) : null;
+  return Object.entries(input as Record<string, unknown>).reduce<Record<string, string>>((acc, [url, publicId]) => {
+    const cleanUrl = String(url || "").trim();
+    const cleanPublicId = String(publicId || "").trim();
+    if (cleanUrl && cleanPublicId && (!allowed || allowed.has(cleanUrl))) {
+      acc[cleanUrl] = cleanPublicId;
+    }
+    return acc;
+  }, {});
+}
+
+function publicIdFromCloudinaryUrl(imageUrl: string): string {
+  try {
+    const parsed = new URL(imageUrl);
+    const uploadMarker = "/image/upload/";
+    const markerIndex = parsed.pathname.indexOf(uploadMarker);
+    if (markerIndex === -1) {
+      return "";
+    }
+
+    let publicPath = parsed.pathname.slice(markerIndex + uploadMarker.length);
+    publicPath = publicPath.replace(/^v\d+\//, "");
+    const extensionIndex = publicPath.lastIndexOf(".");
+    if (extensionIndex > -1) {
+      publicPath = publicPath.slice(0, extensionIndex);
+    }
+
+    return decodeURIComponent(publicPath).trim();
+  } catch {
+    return "";
+  }
+}
+
+function hasCloudinaryConfig() {
+  return Boolean(
+    process.env.CLOUDINARY_URL ||
+    (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
+  );
+}
+
+function uploadProductImageToCloudinary(file: Express.Multer.File): Promise<ProductImageAsset> {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "larson_products",
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error || !result?.secure_url || !result?.public_id) {
+          reject(error || new Error("Cloudinary did not return product image metadata."));
+          return;
+        }
+
+        resolve({
+          url: result.secure_url,
+          publicId: result.public_id,
+        });
+      }
+    );
+
+    stream.end(file.buffer);
+  });
+}
+
+async function destroyCloudinaryImage(publicId: string) {
+  const cleanPublicId = String(publicId || "").trim();
+  if (!cleanPublicId || !hasCloudinaryConfig()) {
+    return;
+  }
+
+  const result = await cloudinary.uploader.destroy(cleanPublicId, {
+    resource_type: "image",
+    invalidate: true,
+  });
+
+  if (result?.result && !["ok", "not found"].includes(result.result)) {
+    throw new Error(`Cloudinary image deletion failed: ${result.result}`);
+  }
+}
+
+async function destroyProductCloudinaryImages(product: any) {
+  const imageUrls = normalizeProductImages(product?.images);
+  const imagePublicIds = normalizeImagePublicIds(product?.imagePublicIds, imageUrls);
+  const publicIds = Array.from(
+    new Set(
+      imageUrls
+        .map((url) => imagePublicIds[url] || publicIdFromCloudinaryUrl(url))
+        .filter((publicId) => publicId.length > 0)
+    )
+  );
+
+  await Promise.all(
+    publicIds.map(async (publicId) => {
+      try {
+        await destroyCloudinaryImage(publicId);
+      } catch (err) {
+        console.warn(`[Cloudinary] Product image cleanup skipped for ${publicId}:`, err);
+      }
+    })
+  );
+}
+
 async function startServer() {
   initializeDatabase();
 
@@ -281,6 +413,41 @@ async function startServer() {
   });
 
   app.use("/api/", generalApiLimiter);
+
+  const productImageUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: PRODUCT_IMAGE_MAX_BYTES,
+      files: PRODUCT_IMAGE_UPLOAD_LIMIT,
+    },
+    fileFilter: (_req, file, cb) => {
+      if (!file.mimetype.startsWith("image/")) {
+        cb(new Error("Only image files can be uploaded for products."));
+        return;
+      }
+      cb(null, true);
+    },
+  });
+
+  const parseProductImages = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    productImageUpload.array("images", PRODUCT_IMAGE_UPLOAD_LIMIT)(req, res, (err) => {
+      if (!err) {
+        next();
+        return;
+      }
+
+      if (err instanceof multer.MulterError) {
+        const message = err.code === "LIMIT_FILE_SIZE"
+          ? "Each product image must be 20MB or smaller."
+          : err.code === "LIMIT_FILE_COUNT"
+            ? `Upload up to ${PRODUCT_IMAGE_UPLOAD_LIMIT} product images at once.`
+            : err.message;
+        return res.status(400).json({ error: message });
+      }
+
+      res.status(400).json({ error: err.message || "Invalid product image upload." });
+    });
+  };
 
   // ═══════════ SECURE AUTH MIDDLEWARE ═══════════
   const authCheck = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -394,13 +561,17 @@ async function startServer() {
       }
 
       const formattedSlug = String(productData.slug).toLowerCase().trim().replace(/[^a-z0-9_-]/g, "-");
+      const imageUrls = normalizeProductImages(productData.images);
+      const persistedImageUrls = imageUrls.length > 0 ? imageUrls : [DEFAULT_PRODUCT_IMAGE_URL];
+      const imagePublicIds = normalizeImagePublicIds(productData.imagePublicIds, persistedImageUrls);
 
       const newProduct = {
         _id: String(productData._id || `p-${Date.now()}`),
         name: String(productData.name).trim(),
         category: String(productData.category).trim(),
         description: String(productData.description || "").trim(),
-        images: productData.images || ["https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=800"],
+        images: persistedImageUrls,
+        imagePublicIds,
         material: String(productData.material || "Premium Unstitched Weft").trim(),
         isNew: !!productData.isNew,
         isFeatured: !!productData.isFeatured,
@@ -475,7 +646,13 @@ async function startServer() {
         swatches: productData.swatches || []
       };
 
-      if (productData.images) updatedFields.images = productData.images;
+      if (Object.prototype.hasOwnProperty.call(productData, "images")) {
+        const imageUrls = normalizeProductImages(productData.images);
+        updatedFields.images = imageUrls;
+        if (Object.prototype.hasOwnProperty.call(productData, "imagePublicIds")) {
+          updatedFields.imagePublicIds = normalizeImagePublicIds(productData.imagePublicIds, imageUrls);
+        }
+      }
       if (productData.slug) {
         updatedFields.slug = String(productData.slug).toLowerCase().trim().replace(/[^a-z0-9_-]/g, "-");
       }
@@ -507,6 +684,178 @@ async function startServer() {
     }
   });
 
+  app.post("/api/products/images/upload", authCheck, parseProductImages, async (req, res) => {
+    const uploadedAssets: ProductImageAsset[] = [];
+
+    try {
+      if (!hasCloudinaryConfig()) {
+        return res.status(500).json({ error: "Cloudinary product image upload is not configured." });
+      }
+
+      const files = ((req.files as Express.Multer.File[]) || []);
+      if (files.length === 0) {
+        return res.status(400).json({ error: "Select at least one product image to upload." });
+      }
+
+      for (const file of files) {
+        uploadedAssets.push(await uploadProductImageToCloudinary(file));
+      }
+
+      const productId = String(req.body?.productId || "").trim();
+      let updatedProduct: any = null;
+
+      if (productId) {
+        const db = await getDb();
+        const uploadedUrls = uploadedAssets.map((asset) => asset.url);
+        const uploadedPublicIds = uploadedAssets.reduce<Record<string, string>>((acc, asset) => {
+          if (asset.publicId) acc[asset.url] = asset.publicId;
+          return acc;
+        }, {});
+
+        if (db) {
+          const existing = await db.collection<any>("products").findOne({ _id: productId as any });
+          if (!existing) {
+            await Promise.all(uploadedAssets.map((asset) => asset.publicId ? destroyCloudinaryImage(asset.publicId) : Promise.resolve()));
+            return res.status(404).json({ error: "Product node not found while attaching uploaded images." });
+          }
+
+          const existingImages = normalizeProductImages(existing.images);
+          const nextImages = [...existingImages, ...uploadedUrls.filter((url) => !existingImages.includes(url))];
+          const nextPublicIds = {
+            ...normalizeImagePublicIds(existing.imagePublicIds, existingImages),
+            ...uploadedPublicIds,
+          };
+
+          updatedProduct = await db.collection<any>("products").findOneAndUpdate(
+            { _id: productId as any },
+            { $set: { images: nextImages, imagePublicIds: normalizeImagePublicIds(nextPublicIds, nextImages) } } as any,
+            { returnDocument: "after" } as any
+          );
+        } else {
+          const list = readCollection(PRODUCTS_FILE);
+          const idx = list.findIndex((p) => p._id === productId);
+          if (idx === -1) {
+            await Promise.all(uploadedAssets.map((asset) => asset.publicId ? destroyCloudinaryImage(asset.publicId) : Promise.resolve()));
+            return res.status(404).json({ error: "Product node not found while attaching uploaded images." });
+          }
+
+          const existingImages = normalizeProductImages(list[idx].images);
+          const nextImages = [...existingImages, ...uploadedUrls.filter((url) => !existingImages.includes(url))];
+          const nextPublicIds = {
+            ...normalizeImagePublicIds(list[idx].imagePublicIds, existingImages),
+            ...uploadedPublicIds,
+          };
+
+          list[idx] = {
+            ...list[idx],
+            images: nextImages,
+            imagePublicIds: normalizeImagePublicIds(nextPublicIds, nextImages),
+          };
+          writeCollection(PRODUCTS_FILE, list);
+          updatedProduct = list[idx];
+        }
+      }
+
+      logAuditAction("PRODUCT_IMAGE_UPLOAD", {
+        productId: productId || "draft",
+        count: uploadedAssets.length,
+      });
+
+      res.status(201).json({
+        images: uploadedAssets,
+        product: updatedProduct,
+      });
+    } catch (err) {
+      await Promise.all(uploadedAssets.map((asset) => asset.publicId ? destroyCloudinaryImage(asset.publicId).catch(() => undefined) : Promise.resolve()));
+      console.error("[Product Image Upload Error]:", err);
+      res.status(500).json({ error: "Failed to upload product images to Cloudinary." });
+    }
+  });
+
+  app.delete("/api/products/images/cloudinary", authCheck, async (req, res) => {
+    try {
+      const publicId = String(req.body?.publicId || "").trim();
+      if (!publicId) {
+        return res.status(400).json({ error: "Cloudinary public ID is required for image cleanup." });
+      }
+
+      await destroyCloudinaryImage(publicId);
+      logAuditAction("PRODUCT_DRAFT_IMAGE_DELETE", { publicId });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[Product Draft Image Delete Error]:", err);
+      res.status(500).json({ error: "Failed to delete product image from Cloudinary." });
+    }
+  });
+
+  app.delete("/api/products/:id/images", authCheck, async (req, res) => {
+    try {
+      const cleanId = String(req.params.id || "").trim();
+      const imageUrl = String(req.body?.url || "").trim();
+      const requestedPublicId = String(req.body?.publicId || "").trim();
+
+      if (!imageUrl) {
+        return res.status(400).json({ error: "Product image URL is required for deletion." });
+      }
+
+      const db = await getDb();
+      let updatedProduct: any = null;
+      let product: any = null;
+
+      if (db) {
+        product = await db.collection<any>("products").findOne({ _id: cleanId as any });
+      } else {
+        product = readCollection(PRODUCTS_FILE).find((p) => p._id === cleanId);
+      }
+
+      if (!product) {
+        return res.status(404).json({ error: "Product node not found while deleting image." });
+      }
+
+      const currentImages = normalizeProductImages(product.images);
+      if (!currentImages.includes(imageUrl)) {
+        return res.status(404).json({ error: "Image URL is not attached to this product." });
+      }
+
+      const currentPublicIds = normalizeImagePublicIds(product.imagePublicIds, currentImages);
+      const publicId = requestedPublicId || currentPublicIds[imageUrl] || publicIdFromCloudinaryUrl(imageUrl);
+      if (publicId) {
+        await destroyCloudinaryImage(publicId);
+      }
+
+      const nextImages = currentImages.filter((url) => url !== imageUrl);
+      const nextPublicIds = { ...currentPublicIds };
+      delete nextPublicIds[imageUrl];
+
+      if (db) {
+        updatedProduct = await db.collection<any>("products").findOneAndUpdate(
+          { _id: cleanId as any },
+          { $set: { images: nextImages, imagePublicIds: normalizeImagePublicIds(nextPublicIds, nextImages) } } as any,
+          { returnDocument: "after" } as any
+        );
+      } else {
+        const list = readCollection(PRODUCTS_FILE);
+        const idx = list.findIndex((p) => p._id === cleanId);
+        if (idx === -1) {
+          return res.status(404).json({ error: "Product node not found while deleting image." });
+        }
+        list[idx] = {
+          ...list[idx],
+          images: nextImages,
+          imagePublicIds: normalizeImagePublicIds(nextPublicIds, nextImages),
+        };
+        writeCollection(PRODUCTS_FILE, list);
+        updatedProduct = list[idx];
+      }
+
+      logAuditAction("PRODUCT_IMAGE_DELETE", { id: cleanId, imageUrl, publicId: publicId || undefined });
+      res.json({ success: true, product: updatedProduct });
+    } catch (err) {
+      console.error("[Product Image Delete Error]:", err);
+      res.status(500).json({ error: "Failed to synchronize product image deletion." });
+    }
+  });
+
   app.delete("/api/products/:id", authCheck, async (req, res) => {
     try {
       const { id } = req.params;
@@ -514,12 +863,22 @@ async function startServer() {
 
       const db = await getDb();
       if (db) {
+        const existing = await db.collection<any>("products").findOne({ _id: cleanId as any });
+        if (!existing) {
+          return res.status(404).json({ error: "Product node not found in Atlas." });
+        }
+        await destroyProductCloudinaryImages(existing);
         const result = await db.collection<any>("products").deleteOne({ _id: cleanId as any });
         if (result.deletedCount === 0) {
           return res.status(404).json({ error: "Product node not found in Atlas." });
         }
       } else {
         const list = readCollection(PRODUCTS_FILE);
+        const existing = list.find((p) => p._id === cleanId);
+        if (!existing) {
+          return res.status(404).json({ error: "Product node not found in Local Storage." });
+        }
+        await destroyProductCloudinaryImages(existing);
         const filtered = list.filter((p) => p._id !== cleanId);
         if (filtered.length === list.length) {
           return res.status(404).json({ error: "Product node not found in Local Storage." });

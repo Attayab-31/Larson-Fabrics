@@ -17,6 +17,7 @@ export interface Product {
   category: string;
   description: string;
   images: string[];
+  imagePublicIds?: Record<string, string>;
   material: string;
   isNew: boolean;
   isFeatured: boolean;
