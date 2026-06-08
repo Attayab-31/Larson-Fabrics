@@ -6,6 +6,7 @@ import { Badge } from "@/src/components/ui/Badge";
 import { Product } from "@/src/types";
 import { cn } from "@/src/lib/utils";
 import { useTransition } from "@/src/components/layout/TransitionProvider";
+import { apiUrl } from "@/src/lib/constants";
 
 export interface ProductCardProps {
   product: Product;
@@ -30,7 +31,7 @@ export function ProductCard({
     async function fetchRating() {
       try {
         const id = product._id || product.slug;
-        const res = await fetch(`/api/reviews/${id}`);
+        const res = await fetch(apiUrl(`/reviews/${id}`));
         if (res.ok && isMounted) {
           const data = await res.json();
           if (Array.isArray(data)) {

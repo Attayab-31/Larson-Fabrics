@@ -3,6 +3,7 @@ import { Star, Camera, Check, AlertCircle, X, Shield } from "lucide-react";
 import { Heading } from "@/src/components/ui/Heading";
 import { Button } from "@/src/components/ui/Button";
 import { Product } from "@/src/types";
+import { apiUrl } from "@/src/lib/constants";
 
 export interface Review {
   _id: string;
@@ -50,7 +51,7 @@ export function ReviewsSection({ product }: ReviewsSectionProps) {
     try {
       setLoading(true);
       setErrorSync("");
-      const res = await fetch(`/api/reviews/${product._id || product.slug}`);
+      const res = await fetch(apiUrl(`/reviews/${product._id || product.slug}`));
       if (res.ok) {
         const data = await res.json();
         setReviews(data || []);
@@ -95,7 +96,7 @@ export function ReviewsSection({ product }: ReviewsSectionProps) {
       setPreviewImage(base64Str);
 
       try {
-        const res = await fetch("/api/reviews/upload", {
+        const res = await fetch(apiUrl("/reviews/upload"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image: base64Str }),
@@ -137,7 +138,7 @@ export function ReviewsSection({ product }: ReviewsSectionProps) {
     setIsSubmitting(true);
 
     try {
-      const res = await fetch("/api/reviews", {
+      const res = await fetch(apiUrl("/reviews"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

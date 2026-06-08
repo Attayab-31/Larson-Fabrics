@@ -1,0 +1,26 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/about",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/track",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/manager",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/bespoke",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/collections/:path*",
+      "destination": "/index.html"
+    }
+  ]
+}

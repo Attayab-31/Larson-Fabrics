@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useCart, Order } from "@/src/lib/cart";
 import { Heading } from "@/src/components/ui/Heading";
 import { Search, Package, MapPin, Calendar, Truck, ArrowRight, Compass, ShieldCheck } from "lucide-react";
+import { apiUrl } from "@/src/lib/constants";
 
 export function Track() {
   const { orders } = useCart();
@@ -20,7 +21,7 @@ export function Track() {
     setLoading(true);
     setErrorMsg("");
     try {
-      const response = await fetch(`/api/orders/${encodeURIComponent(targetId)}`);
+      const response = await fetch(apiUrl(`/orders/${encodeURIComponent(targetId)}`));
       if (!response.ok) {
         throw new Error("Order reference or mobile number not recognized in Lahori dispatch.");
       }

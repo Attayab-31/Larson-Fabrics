@@ -1,10 +1,10 @@
-import { API_URL } from "./constants";
+import { apiUrl } from "./constants";
 
 export async function apiFetch<T>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(apiUrl(path), {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   });

@@ -6,6 +6,7 @@ import {
   GoldParticles,
   Badge,
 } from "@/src/components/ui";
+import { apiUrl } from "@/src/lib/constants";
 
 interface BespokeFormState {
   customerName: string;
@@ -58,7 +59,7 @@ export function Bespoke() {
     setErrorCode(null);
 
     try {
-      const response = await fetch("/api/bespoke", {
+      const response = await fetch(apiUrl("/bespoke"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),

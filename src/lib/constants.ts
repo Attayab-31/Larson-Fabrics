@@ -9,4 +9,17 @@ export const BRAND = {
   whatsapp: "https://wa.me/923001234567",
 } as const;
 
-export const API_URL = "/api";
+type ViteEnv = {
+  VITE_API_URL?: string;
+};
+
+const configuredApiUrl = (import.meta as ImportMeta & { env?: ViteEnv }).env?.VITE_API_URL?.trim();
+
+export const API_URL = configuredApiUrl
+  ? configuredApiUrl.replace(/\/+$/, "")
+  : "/api";
+
+export function apiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_URL}${normalizedPath}`;
+}

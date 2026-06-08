@@ -1,4 +1,5 @@
 import { Order } from "@/src/types/cart";
+import { apiUrl } from "@/src/lib/constants";
 
 export async function createOrderOnServer(orderData: {
   customerName: string;
@@ -18,7 +19,7 @@ export async function createOrderOnServer(orderData: {
   shippingCost: number;
   total: number;
 }): Promise<Order> {
-  const response = await fetch("/api/orders", {
+  const response = await fetch(apiUrl("/orders"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(orderData),

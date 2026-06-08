@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
 import { Check } from "lucide-react";
+import { apiUrl } from "@/src/lib/constants";
 
 export interface InquiryFormProps {
   productId: string;
@@ -62,7 +63,7 @@ export function InquiryForm({
     setError(null);
 
     try {
-      const response = await fetch("/api/inquiries", {
+      const response = await fetch(apiUrl("/inquiries"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

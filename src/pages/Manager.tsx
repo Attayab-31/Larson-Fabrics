@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Heading } from "@/src/components/ui/Heading";
 import { Badge } from "@/src/components/ui/Badge";
+import { apiUrl } from "@/src/lib/constants";
 import { 
   Lock, 
   Package, 
@@ -98,7 +99,7 @@ export function Manager() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch("/api/admin/verify", {
+      const response = await fetch(apiUrl("/admin/verify"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ passcode: passcode.trim() }),
@@ -121,20 +122,20 @@ export function Manager() {
     try {
       const headers = { "Authorization": `Bearer ${passcode}` };
       const [ordersRes, bespokeRes, inquiriesRes, productsRes, reviewsRes] = await Promise.all([
-        fetch("/api/orders", { headers }).then((r) => { 
+        fetch(apiUrl("/orders"), { headers }).then((r) => { 
           if (r.status === 401) throw new Error("Unauthorized"); 
           return r.json(); 
         }),
-        fetch("/api/bespoke", { headers }).then((r) => { 
+        fetch(apiUrl("/bespoke"), { headers }).then((r) => { 
           if (r.status === 401) throw new Error("Unauthorized"); 
           return r.json(); 
         }),
-        fetch("/api/inquiries", { headers }).then((r) => { 
+        fetch(apiUrl("/inquiries"), { headers }).then((r) => { 
           if (r.status === 401) throw new Error("Unauthorized"); 
           return r.json(); 
         }),
-        fetch("/api/products").then((r) => r.json()),
-        fetch("/api/admin/reviews", { headers }).then((r) => {
+        fetch(apiUrl("/products")).then((r) => r.json()),
+        fetch(apiUrl("/admin/reviews"), { headers }).then((r) => {
           if (r.status === 401) throw new Error("Unauthorized");
           return r.json();
         }).catch(() => []) // Gracefully default to empty is server is starting up
@@ -163,7 +164,7 @@ export function Manager() {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${passcode}` 
       };
-      const res = await fetch(`/api/admin/reviews/${id}`, {
+      const res = await fetch(apiUrl(`/admin/reviews/${id}`), {
         method: "PUT",
         headers,
         body: JSON.stringify({ status })
@@ -207,7 +208,7 @@ export function Manager() {
 
   const saveOrderUpdates = async (orderId: string) => {
     try {
-      const response = await fetch(`/api/orders/${orderId}`, {
+      const response = await fetch(apiUrl(`/orders/${orderId}`), {
         method: "PUT",
         headers: { 
           "Content-Type": "application/json",
@@ -352,7 +353,7 @@ export function Manager() {
     };
 
     try {
-      const url = showProductForm === "create" ? "/api/products" : `/api/products/${selectedProductId}`;
+      const url = showProductForm === "create" ? apiUrl("/products") : apiUrl(`/products/${selectedProductId}`);
       const method = showProductForm === "create" ? "POST" : "PUT";
 
       const res = await fetch(url, {
@@ -377,7 +378,7 @@ export function Manager() {
       );
 
       // Re-fetch database lists
-      const prodRes = await fetch("/api/products").then((r) => r.json());
+      const prodRes = await fetch(apiUrl("/products")).then((r) => r.json());
       setProducts(prodRes || []);
 
       setTimeout(() => {
@@ -395,7 +396,7 @@ export function Manager() {
     if (!proceed) return;
 
     try {
-      const res = await fetch(`/api/products/${id}`, {
+      const res = await fetch(apiUrl(`/products/${id}`), {
         method: "DELETE",
         headers: {
           "Authorization": `Bearer ${passcode}`
@@ -1028,7 +1029,7 @@ export function Manager() {
                                     const fileReader = new FileReader();
                                     fileReader.onloadend = async () => {
                                       try {
-                                        const res = await fetch("/api/reviews/upload", {
+                                        const res = await fetch(apiUrl("/reviews/upload"), {
                                           method: "POST",
                                           headers: { "Content-Type": "application/json" },
                                           body: JSON.stringify({ image: fileReader.result as string })
